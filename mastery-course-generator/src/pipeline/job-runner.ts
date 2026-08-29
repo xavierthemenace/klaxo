@@ -12,7 +12,8 @@ import { runJob } from './orchestrator';
 
 const HEARTBEAT_MS = 30_000;
 
-function claimQueuedJob(jobId: string): boolean {
+/** Atomically claim a queued job. Exported so concurrency can be integration-tested. */
+export function claimJobForExecution(jobId: string): boolean {
   const now = Date.now();
   const result = getDb().run(sql`
     UPDATE generation_jobs
@@ -23,12 +24,11 @@ function claimQueuedJob(jobId: string): boolean {
       AND state = 'QUEUED'
       AND cancel_requested = 0
   `);
-
   return Number(result.changes ?? 0) === 1;
 }
 
 export async function runClaimedJob(jobId: string): Promise<boolean> {
-  if (!claimQueuedJob(jobId)) return false;
+  if (!claimJobForExecution(jobId)) return false;
 
   let timer: ReturnType<typeof setInterval> | undefined;
   try {

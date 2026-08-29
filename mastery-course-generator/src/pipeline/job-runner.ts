@@ -1,30 +1,40 @@
 /**
  * Single-entry job runner.
  *
- * The worker and the HTTP fallback both pass through this module so a queued job
- * is atomically claimed before execution. The existing orchestrator remains the
- * source of truth for stage execution; this wrapper owns concurrency safety.
+ * Both the worker and the HTTP fallback pass through this module. A queued job
+ * is claimed with one atomic UPDATE before execution, so two processes can see
+ * the same queue entry but only one can own it.
  */
-import { claimQueuedJob, getGenerationJob, updateGenerationJob } from '../db/repo';
+import { sql } from 'drizzle-orm';
+import { getDb } from '../db';
+import { getGenerationJob, updateGenerationJob } from '../db/repo';
 import { runJob } from './orchestrator';
 
 const HEARTBEAT_MS = 30_000;
 
-/**
- * Atomically claim a queued job, execute it, and keep its updatedAt timestamp
- * fresh while long-running AI work is in progress.
- */
+function claimQueuedJob(jobId: string): boolean {
+  const result = getDb().run(sql`
+    UPDATE generation_jobs
+    SET started_at = COALESCE(started_at, ${Date.now()}),
+        attempts = attempts + 1,
+        updated_at = ${Date.now()}
+    WHERE id = ${jobId}
+      AND state = 'QUEUED'
+      AND cancel_requested = 0
+  `);
+
+  return Number(result.changes ?? 0) === 1;
+}
+
 export async function runClaimedJob(jobId: string): Promise<boolean> {
-  const claimed = claimQueuedJob(jobId);
-  if (!claimed) return false;
+  if (!claimQueuedJob(jobId)) return false;
 
   let timer: ReturnType<typeof setInterval> | undefined;
   try {
     timer = setInterval(() => {
       const current = getGenerationJob(jobId);
       if (!current || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(current.state)) return;
-      // updatedAt is the existing durable heartbeat field. We intentionally do
-      // not change the user-visible progress/message during a heartbeat.
+      // updatedAt is the existing durable heartbeat used by recovery.
       updateGenerationJob(jobId, {});
     }, HEARTBEAT_MS);
 

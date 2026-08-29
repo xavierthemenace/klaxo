@@ -13,11 +13,12 @@ import { runJob } from './orchestrator';
 const HEARTBEAT_MS = 30_000;
 
 function claimQueuedJob(jobId: string): boolean {
+  const now = Date.now();
   const result = getDb().run(sql`
     UPDATE generation_jobs
-    SET started_at = COALESCE(started_at, ${Date.now()}),
-        attempts = attempts + 1,
-        updated_at = ${Date.now()}
+    SET state = 'ANALYZING',
+        started_at = COALESCE(started_at, ${now}),
+        updated_at = ${now}
     WHERE id = ${jobId}
       AND state = 'QUEUED'
       AND cancel_requested = 0
@@ -34,7 +35,6 @@ export async function runClaimedJob(jobId: string): Promise<boolean> {
     timer = setInterval(() => {
       const current = getGenerationJob(jobId);
       if (!current || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(current.state)) return;
-      // updatedAt is the existing durable heartbeat used by recovery.
       updateGenerationJob(jobId, {});
     }, HEARTBEAT_MS);
 

@@ -1,10 +1,10 @@
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
-  // The AI + DB layers are server-only. Never bundle secrets into the client.
-  serverExternalPackages: ['node:sqlite', 'pdfjs-dist'],
+  // Run server-only packages in Node instead of attempting to bundle them.
+  serverExternalPackages: ['better-sqlite3', 'node:sqlite', 'pdfjs-dist'],
+  output: 'standalone',
   experimental: {
-    // Generation jobs can outlive a single request handler tick.
     serverActions: { bodySizeLimit: '12mb' },
   },
 };

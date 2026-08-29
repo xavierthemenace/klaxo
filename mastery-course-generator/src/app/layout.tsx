@@ -3,9 +3,9 @@ import Link from 'next/link';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'KLAXO',
+  title: 'KLAXO — Curriculum Engineering',
   description:
-    'KLAXO is an AI-powered curriculum engineering platform that transforms messy material into mastery-oriented courses.',
+    'KLAXO transforms messy educational material into structured, grounded, mastery-oriented courses.',
 };
 
 function Wordmark() {
@@ -13,7 +13,7 @@ function Wordmark() {
     <span className="inline-flex items-center gap-2.5">
       <span
         aria-hidden="true"
-        className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-primary-500 to-primary-700 text-white shadow-sm"
+        className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-primary-500 to-primary-700 text-white shadow-sm ring-1 ring-primary-400/20"
       >
         <svg
           viewBox="0 0 24 24"
@@ -32,40 +32,40 @@ function Wordmark() {
   );
 }
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <body className="min-h-screen bg-background font-sans text-foreground antialiased">
-        <header className="sticky top-0 z-40 border-b border-border/70 bg-background/80 backdrop-blur-md">
-          <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between px-4 sm:px-6">
+        <div aria-hidden="true" className="pointer-events-none fixed inset-0 -z-10 bg-grid" />
+        <header className="sticky top-0 z-40 border-b border-border/70 bg-background/85 backdrop-blur-xl supports-[backdrop-filter]:bg-background/70">
+          <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
             <Link
               href="/dashboard"
-              className="rounded-md text-foreground transition-colors hover:text-primary"
+              className="rounded-lg text-foreground transition-opacity hover:opacity-80 focus-visible:outline-none"
               aria-label="KLAXO — go to dashboard"
             >
               <Wordmark />
             </Link>
-            <nav aria-label="Primary" className="flex items-center gap-1 sm:gap-2">
+
+            <nav aria-label="Primary" className="flex items-center gap-1">
               <Link
                 href="/"
-                className="rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                className="rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               >
                 Home
               </Link>
               <Link
                 href="/dashboard"
-                className="rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                className="rounded-lg bg-primary/10 px-3 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/15"
               >
                 Dashboard
               </Link>
             </nav>
           </div>
         </header>
-        <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">{children}</main>
+        <main className="relative mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
+          {children}
+        </main>
       </body>
     </html>
   );

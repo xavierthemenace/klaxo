@@ -3,15 +3,13 @@
  *
  * POST /api/courses/:id/jobs          - start a new generation job
  * GET  /api/courses/:id/jobs          - list jobs for a course
- * GET  /api/courses/:id/jobs/:jobId   - get job status/progress
- * POST /api/courses/:id/jobs/:jobId/cancel - cancel a running job
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { requireUserId } from '@/lib/auth';
-import { getCourse } from '@/db/repo';
-import { listGenerationJobs } from '@/db/repo';
-import { runJob, startJob } from '@/pipeline/orchestrator';
+import { getCourse, listGenerationJobs } from '@/db/repo';
+import { runClaimedJob } from '@/pipeline/job-runner';
+import { startJob } from '@/pipeline/orchestrator';
 import { notFound, toAppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 
@@ -21,9 +19,6 @@ const StartJobSchema = z.object({
   input: z.record(z.string(), z.unknown()).optional(),
 });
 
-/**
- * POST /api/courses/:id/jobs
- */
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -31,14 +26,11 @@ export async function POST(
   try {
     const userId = await requireUserId();
     const { id } = await params;
-
     const course = getCourse(id);
     if (!course) throw notFound('Course not found');
     if (course.userId !== userId) throw notFound('Course not found');
 
-    const body = await req.json();
-    const parsed = StartJobSchema.safeParse(body);
-
+    const parsed = StartJobSchema.safeParse(await req.json());
     if (!parsed.success) {
       return NextResponse.json(
         { error: 'Invalid input', details: parsed.error.flatten() },
@@ -46,7 +38,6 @@ export async function POST(
       );
     }
 
-    // Use idempotent job creation
     const { jobId, created } = startJob({
       courseId: id,
       userId,
@@ -56,49 +47,37 @@ export async function POST(
     });
 
     if (created) {
-      // Durable execution: the dedicated worker (`npm run worker`) is the
-      // production-grade executor. For single-process dev without the worker,
-      // kick the job off in-process as a best-effort fallback. The job's state
-      // is persisted in the DB, so a request dying mid-flight never loses work —
-      // the worker (or a later recovery pass) resumes it.
-      runJob(jobId).catch((err) => {
-        // Error is already recorded on the job by runJob; log via structured logger.
-        logger.error('In-process job execution failed', { jobId, error: (err as Error).message });
+      // Dev fallback and the dedicated worker share the exact same atomic claim
+      // path. If the worker wins, this returns false and does nothing.
+      void runClaimedJob(jobId).catch((err) => {
+        logger.error('In-process job execution failed', {
+          jobId,
+          error: err instanceof Error ? err.message : String(err),
+        });
       });
     }
 
     return NextResponse.json({ jobId, created }, { status: created ? 201 : 200 });
   } catch (err) {
     const appErr = toAppError(err);
-    return NextResponse.json(
-      { error: appErr.message },
-      { status: appErr.status },
-    );
+    return NextResponse.json({ error: appErr.message }, { status: appErr.status });
   }
 }
 
-/**
- * GET /api/courses/:id/jobs
- */
 export async function GET(
-  req: NextRequest,
+  _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
   try {
     const userId = await requireUserId();
     const { id } = await params;
-
     const course = getCourse(id);
     if (!course) throw notFound('Course not found');
     if (course.userId !== userId) throw notFound('Course not found');
 
-    const jobs = listGenerationJobs(id);
-    return NextResponse.json({ jobs });
+    return NextResponse.json({ jobs: listGenerationJobs(id) });
   } catch (err) {
     const appErr = toAppError(err);
-    return NextResponse.json(
-      { error: appErr.message },
-      { status: appErr.status },
-    );
+    return NextResponse.json({ error: appErr.message }, { status: appErr.status });
   }
 }

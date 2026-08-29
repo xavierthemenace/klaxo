@@ -18,16 +18,13 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN groupadd --system --gid 1001 nodejs \
-  && useradd --system --uid 1001 --gid nodejs nextjs
+  && useradd --system --uid 1001 --gid nodejs nextjs \
+  && mkdir -p /app/public /app/data /app/uploads \
+  && chown -R nextjs:nodejs /app
 
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
-COPY --from=builder --chown=nextjs:nodejs /app/src ./src
-
-RUN mkdir -p /app/data /app/uploads \
-  && chown -R nextjs:nodejs /app/data /app/uploads
 
 USER nextjs
 EXPOSE 3000
@@ -38,3 +35,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "server.js"]
+
+# Worker target intentionally retains build-time dependencies because the current
+# worker is TypeScript and is executed by tsx. It is deployed separately from web.
+FROM builder AS worker
+ENV NODE_ENV=production
+CMD ["node_modules/.bin/tsx", "scripts/worker.ts"]

@@ -25,13 +25,13 @@ function ensureLeaseTable(): void {
 }
 
 function claimLease(jobId: string): string | null {
+  const job = getGenerationJob(jobId);
+  if (!job || job.state !== 'QUEUED' || job.cancelRequested === 1) return null;
+
   ensureLeaseTable();
   const now = Date.now();
   const owner = randomUUID();
 
-  // A worker that died without cleanup leaves a lease behind. Its heartbeat is
-  // only reclaimable after a generous window, which is longer than the normal
-  // heartbeat interval and avoids normal concurrent execution races.
   getDb().run(sql`
     DELETE FROM generation_job_leases
     WHERE job_id = ${jobId}
@@ -45,8 +45,6 @@ function claimLease(jobId: string): string | null {
 
   if (Number(result.changes ?? 0) !== 1) return null;
 
-  // Mark the job active immediately. The orchestrator may change its public
-  // stage later, but the lease remains the authoritative execution lock.
   getDb().run(sql`
     UPDATE generation_jobs
     SET state = 'ANALYZING',
@@ -97,8 +95,8 @@ export async function runClaimedJob(jobId: string): Promise<boolean> {
       try {
         heartbeat(jobId, owner);
       } catch {
-        // The orchestrator will surface actual DB failures; heartbeat failures
-        // should not create an unhandled timer rejection.
+        // Keep the timer from becoming an unhandled rejection. The main job
+        // execution remains responsible for surfacing database failures.
       }
     }, HEARTBEAT_MS);
 

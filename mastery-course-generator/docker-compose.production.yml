@@ -1,6 +1,8 @@
 services:
   web:
-    build: .
+    build:
+      context: .
+      target: runner
     restart: unless-stopped
     env_file: .env
     environment:
@@ -12,16 +14,14 @@ services:
     volumes:
       - klaxo-data:/app/data
       - klaxo-uploads:/app/uploads
-    depends_on:
-      worker:
-        condition: service_started
     read_only: true
     tmpfs:
       - /tmp
 
   worker:
-    build: .
-    command: ["node", "scripts/worker.js"]
+    build:
+      context: .
+      target: worker
     restart: unless-stopped
     env_file: .env
     environment:

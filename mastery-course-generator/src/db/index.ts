@@ -1,9 +1,9 @@
 /**
  * Database connection + initialization.
  *
- * Uses `better-sqlite3` (synchronous, no native compilation issues) via
- * Drizzle's `drizzle-orm/better-sqlite3` driver. The schema is created from
- * `ddl.ts` on first connection.
+ * SQLite remains the local/default driver. This connection is deliberately
+ * hardened for containerized production: WAL mode, busy timeouts, foreign-key
+ * enforcement, and durable journaling are configured before Drizzle is created.
  */
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
@@ -18,9 +18,6 @@ export type Database = BetterSQLite3Database<typeof schema>;
 let db: Database | null = null;
 let sqlite: Database.Database | null = null;
 
-/**
- * Open (or reuse) the SQLite database, applying DDL if needed.
- */
 export function getDb(): Database {
   if (db) return db;
 
@@ -34,7 +31,11 @@ export function getDb(): Database {
 
   sqlite = new Database(file);
   sqlite.pragma('foreign_keys = ON');
+  sqlite.pragma(`busy_timeout = ${env.DATABASE_BUSY_TIMEOUT_MS}`);
   sqlite.pragma('journal_mode = WAL');
+  sqlite.pragma('synchronous = NORMAL');
+  sqlite.pragma('temp_store = MEMORY');
+  sqlite.pragma('wal_autocheckpoint = 1000');
 
   for (const stmt of schemaDdl()) {
     sqlite.exec(stmt);
@@ -44,9 +45,6 @@ export function getDb(): Database {
   return db;
 }
 
-/**
- * Test helper: reset the singleton and close the underlying handle.
- */
 export function resetDb(): void {
   if (sqlite) {
     sqlite.close();

@@ -1,0 +1,37 @@
+services:
+  web:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_FILE: /app/data/mastery.db
+      UPLOAD_DIR: /app/uploads
+    ports:
+      - "3000:3000"
+    volumes:
+      - klaxo-data:/app/data
+      - klaxo-uploads:/app/uploads
+    depends_on:
+      worker:
+        condition: service_started
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  worker:
+    build: .
+    command: ["node", "scripts/worker.js"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_FILE: /app/data/mastery.db
+      UPLOAD_DIR: /app/uploads
+    volumes:
+      - klaxo-data:/app/data
+      - klaxo-uploads:/app/uploads
+
+volumes:
+  klaxo-data:
+  klaxo-uploads:

@@ -25,7 +25,6 @@ export const DetectedUnitSchema = z.object({
   ordinal: z.number().int(),
   description: z.string().optional(),
   classification: ClassifiedContentSchema.default('REQUIRED'),
-  objectiveIds: z.array(z.string()).default([]),
 });
 
 /** A detected learning objective from source extraction. */
@@ -90,7 +89,6 @@ export const BlueprintObjectiveSchema = z.object({
   difficulty: DifficultySchema.default(3),
   importance: ImportanceSchema.default(3),
   classification: ClassifiedContentSchema.default('REQUIRED'),
-  prerequisites: z.array(z.string()).default([]),
 });
 
 /** A unit in the curriculum blueprint. */
@@ -174,7 +172,11 @@ export const LessonSectionSchema = z.object({
     'retrieval',
     'summary',
     'mastery_check',
-  ]),
+  ])
+    // An unfamiliar label like "introduction" or "key_takeaways" is a naming
+    // difference, not a content failure. Rejecting it threw away the whole
+    // lesson over one word.
+    .catch('explanation'),
   title: z.string(),
   content: z.string(),
   visual: VisualSpecSchema.optional(),
@@ -183,7 +185,10 @@ export const LessonSectionSchema = z.object({
 /** Full generated lesson content. */
 export const LessonContentSchema = z.object({
   objectives: z.array(z.string()).default([]),
-  sections: z.array(LessonSectionSchema).default([]),
+  // Required, and non-empty. With everything optional, any JSON object at all
+  // validated — a wrapped `{"lesson": {…}}` reply, or even a blueprint — and
+  // the pipeline happily published an empty lesson and reported success.
+  sections: z.array(LessonSectionSchema).min(1),
   misconceptions: z.array(MisconceptionSchema).default([]),
   visuals: z.array(VisualSpecSchema).default([]),
   masteryCheck: z
@@ -192,7 +197,7 @@ export const LessonContentSchema = z.object({
       criteria: z.string(),
     })
     .optional(),
-  summary: z.string().default(''),
+  summary: z.string().min(1),
   estimatedMinutes: z.number().int().positive().optional(),
 });
 
@@ -211,10 +216,24 @@ export const ChoiceSchema = z.object({
 
 /** A single question. */
 export const QuestionSchema = z.object({
-  kind: z.enum(['mcq', 'short_answer', 'numeric', 'proof', 'code', 'essay', 'matching']),
+  kind: z
+    .enum(['mcq', 'short_answer', 'numeric', 'proof', 'code', 'essay', 'matching', 'ordering'])
+    // `true_false` and `fill_in_blank` come back often and are answered like a
+    // short answer. Better that than losing the whole set.
+    .catch('short_answer'),
   prompt: z.string(),
+  // The answer to a numeric question is a number, and to a short answer a
+  // string. Insisting on an object failed a whole set over one question.
+  answerKey: z
+    .union([
+      z.record(z.string(), z.unknown()),
+      z.string(),
+      z.number(),
+      z.boolean(),
+      z.array(z.unknown()),
+    ])
+    .optional(),
   choices: z.array(ChoiceSchema).optional(),
-  answerKey: z.record(z.string(), z.unknown()).optional(),
   explanation: z.string().optional(),
   misconceptions: z.array(z.string()).default([]),
   expectedSkill: z.string().optional(),
@@ -227,7 +246,9 @@ export const PracticeSetSchema = z.object({
   title: z.string(),
   level: z.enum(['recognition', 'guided', 'independent', 'application', 'transfer', 'challenge']).default('independent'),
   objectiveId: z.string().optional(),
-  questions: z.array(QuestionSchema).default([]),
+  // Required and non-empty: a reply that named the array `problems` used to
+  // validate as a practice set with no questions in it.
+  questions: z.array(QuestionSchema).min(1),
 });
 
 /** Assessment with aligned questions. */
@@ -236,7 +257,7 @@ export const AssessmentSchema = z.object({
   title: z.string(),
   instructions: z.string().optional(),
   objectiveIds: z.array(z.string()).default([]),
-  questions: z.array(QuestionSchema).default([]),
+  questions: z.array(QuestionSchema).min(1),
   passThreshold: z.number().min(0).max(1).default(0.8),
 });
 
@@ -261,8 +282,10 @@ export const QaCheckSchema = z.object({
 
 /** A QA run result. */
 export const QaResultSchema = z.object({
-  checks: z.array(QaCheckSchema).default([]),
-  summary: z.string().default(''),
+  // Required, so a reply like {"verdict":"looks good"} cannot pass as a clean
+  // QA run that checked nothing.
+  checks: z.array(QaCheckSchema),
+  summary: z.string().min(1),
   passRate: z.number().min(0).max(1).optional(),
 });
 

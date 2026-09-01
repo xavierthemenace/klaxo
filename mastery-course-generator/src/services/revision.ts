@@ -6,12 +6,27 @@
  * *specific* repair action, and only that entity is regenerated — never the
  * whole course. Repairs are bounded and idempotent.
  */
-import { getObjective, listObjectives, listLessons, listUnits, getLesson, updateLesson, getQuestion } from '../db/repo';
+import {
+  getObjective,
+  listObjectives,
+  listLessons,
+  listUnits,
+  getLesson,
+  updateLesson,
+  getQuestion,
+  deleteQuestion,
+  getAssessment,
+  deleteAssessment,
+  getPracticeSet,
+  deletePracticeSet,
+} from '../db/repo';
 import {
   generateLesson,
   generateAssessment,
+  generatePractice,
   persistLesson,
   persistAssessment,
+  persistPracticeSet,
 } from './course-generation';
 import { logger } from '../lib/logger';
 
@@ -47,7 +62,7 @@ async function repairOne(courseId: string, failure: QaFailure): Promise<RepairRe
       const obj = getObjective(objectiveId);
       if (!obj) return { checkKey, entityType, entityId, repaired: false, note: 'Objective not found.' };
       const assessment = await generateAssessment(courseId, [objectiveId], 'formative');
-      persistAssessment(courseId, obj.unitId ?? undefined, assessment);
+      persistAssessment(courseId, obj.unitId ?? undefined, assessment, [objectiveId]);
       return { checkKey, entityType, entityId, repaired: true, note: `Generated targeted assessment for objective "${obj.code ?? objectiveId}".` };
     }
 
@@ -119,17 +134,102 @@ async function repairOne(courseId: string, failure: QaFailure): Promise<RepairRe
       return { checkKey, entityType, entityId, repaired: true, note: `Regenerated lesson "${lesson.title}" to fix invalid equations.` };
     }
 
-    case 'missing_assessment_coverage': {
-      // Assessment missing coverage for some objectives
-      const objectiveId = entityId;
-      if (!objectiveId || entityType !== 'objective') {
-        return { checkKey, entityType, entityId, repaired: false, note: 'Missing objective id.' };
+    case 'empty_lesson_content': {
+      // The lesson row exists but holds nothing. Same repair as a duplicate:
+      // write it again from the objectives it was meant to cover.
+      const lessonId = entityId;
+      if (!lessonId || entityType !== 'lesson') {
+        return { checkKey, entityType, entityId, repaired: false, note: 'Missing lesson id.' };
       }
-      const obj = getObjective(objectiveId);
-      if (!obj) return { checkKey, entityType, entityId, repaired: false, note: 'Objective not found.' };
-      const assessment = await generateAssessment(courseId, [objectiveId], 'formative');
-      persistAssessment(courseId, obj.unitId ?? undefined, assessment);
-      return { checkKey, entityType, entityId, repaired: true, note: `Generated assessment coverage for objective "${obj.code ?? objectiveId}".` };
+      const lesson = getLesson(lessonId);
+      if (!lesson) return { checkKey, entityType, entityId, repaired: false, note: 'Lesson not found.' };
+
+      const objectiveIds = JSON.parse(lesson.objectiveIds ?? '[]') as string[];
+      if (objectiveIds.length === 0) {
+        return { checkKey, entityType, entityId, repaired: false, note: 'Lesson has no objectives to regenerate from.' };
+      }
+
+      const rewritten = await generateLesson(courseId, lesson.unitId, objectiveIds, lesson.topicId ?? undefined, lesson.ordinal);
+      updateLesson(lessonId, {
+        content: JSON.stringify(rewritten),
+        title: rewritten.sections[0]?.title ?? lesson.title,
+        summary: rewritten.summary,
+        estimatedMinutes: rewritten.estimatedMinutes,
+        status: 'regenerated',
+        origin: 'AI_GENERATED',
+      });
+      return { checkKey, entityType, entityId, repaired: true, note: `Rewrote empty lesson "${lesson.title}".` };
+    }
+
+    case 'duplicate_questions': {
+      // Two questions asking the same thing. Removing the duplicate is the
+      // whole fix, and it costs no AI call at all.
+      const questionId = entityId;
+      if (!questionId || entityType !== 'question') {
+        return { checkKey, entityType, entityId, repaired: false, note: 'Missing question id.' };
+      }
+      if (!getQuestion(questionId)) {
+        return { checkKey, entityType, entityId, repaired: false, note: 'Question not found.' };
+      }
+      deleteQuestion(questionId);
+      return { checkKey, entityType, entityId, repaired: true, note: 'Removed the duplicate question.' };
+    }
+
+    case 'assessment_without_questions': {
+      const assessmentId = entityId;
+      if (!assessmentId || entityType !== 'assessment') {
+        return { checkKey, entityType, entityId, repaired: false, note: 'Missing assessment id.' };
+      }
+      const existingAssessment = getAssessment(assessmentId);
+      if (!existingAssessment) {
+        return { checkKey, entityType, entityId, repaired: false, note: 'Assessment not found.' };
+      }
+
+      let assessmentObjectiveIds: string[] = [];
+      try {
+        assessmentObjectiveIds = JSON.parse(existingAssessment.objectiveIds ?? '[]') as string[];
+      } catch {
+        assessmentObjectiveIds = [];
+      }
+      assessmentObjectiveIds = assessmentObjectiveIds.filter((oid) => getObjective(oid));
+
+      if (assessmentObjectiveIds.length === 0) {
+        // Nothing to build questions from, and an empty shell is worse than none.
+        deleteAssessment(assessmentId);
+        return { checkKey, entityType, entityId, repaired: true, note: 'Removed an empty assessment with no objectives.' };
+      }
+
+      const replacementAssessment = await generateAssessment(courseId, assessmentObjectiveIds, 'formative');
+      persistAssessment(
+        courseId,
+        existingAssessment.unitId ?? undefined,
+        replacementAssessment,
+        assessmentObjectiveIds,
+      );
+      deleteAssessment(assessmentId);
+      return { checkKey, entityType, entityId, repaired: true, note: `Replaced empty assessment "${existingAssessment.title}".` };
+    }
+
+    case 'practice_set_without_questions': {
+      const practiceSetId = entityId;
+      if (!practiceSetId || entityType !== 'practice_set') {
+        return { checkKey, entityType, entityId, repaired: false, note: 'Missing practice set id.' };
+      }
+      const existingSet = getPracticeSet(practiceSetId);
+      if (!existingSet) {
+        return { checkKey, entityType, entityId, repaired: false, note: 'Practice set not found.' };
+      }
+
+      const setObjectiveId = existingSet.objectiveId;
+      if (!setObjectiveId || !getObjective(setObjectiveId)) {
+        deletePracticeSet(practiceSetId);
+        return { checkKey, entityType, entityId, repaired: true, note: 'Removed an empty practice set with no objective.' };
+      }
+
+      const replacementSet = await generatePractice(courseId, setObjectiveId);
+      persistPracticeSet(courseId, setObjectiveId, existingSet.lessonId ?? undefined, replacementSet);
+      deletePracticeSet(practiceSetId);
+      return { checkKey, entityType, entityId, repaired: true, note: `Replaced empty practice set "${existingSet.title}".` };
     }
 
     case 'malformed_question_structure': {
@@ -175,26 +275,6 @@ async function repairOne(courseId: string, failure: QaFailure): Promise<RepairRe
       //   description: `Demonstrate proficiency in: ${obj.statement}`,
       // });
       return { checkKey, entityType, entityId, repaired: false, note: 'Mastery criteria update not implemented yet; skipped.' };
-    }
-
-    case 'classification_inconsistency': {
-      // Classification inconsistency
-      const objectiveId = entityId;
-      if (!objectiveId || entityType !== 'objective') {
-        return { checkKey, entityType, entityId, repaired: false, note: 'Missing objective id.' };
-      }
-      // Classification inconsistencies need human judgment
-      return { checkKey, entityType, entityId, repaired: false, note: 'Classification inconsistency requires manual review.' };
-    }
-
-    case 'broken_prerequisite_relationship': {
-      // Broken prerequisite chain
-      const objectiveId = entityId;
-      if (!objectiveId || entityType !== 'objective') {
-        return { checkKey, entityType, entityId, repaired: false, note: 'Missing objective id.' };
-      }
-      // Prerequisite issues are complex; flag for manual review
-      return { checkKey, entityType, entityId, repaired: false, note: 'Prerequisite relationship issues require manual review.' };
     }
 
     default:

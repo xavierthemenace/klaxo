@@ -7,6 +7,7 @@
 import { z } from 'zod';
 import { AIProvider, CompletionRequest, ModelRouting } from './provider';
 import { logger } from '../lib/logger';
+import { getEnv } from '../lib/env';
 
 /**
  * Pipeline stages that require model routing.
@@ -100,10 +101,21 @@ export async function generateStructured<T extends z.ZodTypeAny>(
         messages,
         model,
         temperature: options.temperature ?? 0.3,
-        maxTokens: options.maxTokens ?? 4096,
+        // AI_MAX_TOKENS used to be read into the config and then ignored here,
+        // so raising it in .env did nothing at all.
+        maxTokens: options.maxTokens ?? getEnv().AI_MAX_TOKENS,
         responseFormat: 'json',
         jsonSchema: zodToJsonSchema(request.schema),
       });
+
+      // A cut-off reply is not a malformed one, and feeding it back for repair
+      // just truncates again at the same place. Say what actually happened.
+      if (completion.finishReason === 'length') {
+        throw new Error(
+          'The model\'s reply was cut off before it finished (token limit reached). ' +
+          'Raise AI_MAX_TOKENS in .env, or use a model with a larger output budget.',
+        );
+      }
 
       lastOutput = completion.content;
       lastFailure = 'parse';

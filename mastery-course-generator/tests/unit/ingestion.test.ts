@@ -5,7 +5,7 @@ process.env.DATABASE_FILE = ':memory:';
 process.env.UPLOAD_DIR = './.tmp-test-uploads';
 
 import { resetDb, getDb } from '@/db';
-import { createCourse, createUser } from '@/db/repo';
+import { createCourse, createUser, getSourceDocument } from '@/db/repo';
 import {
   classifyUpload,
   validateUpload,
@@ -142,6 +142,23 @@ describe('ingestUpload', () => {
     expect(result.documentId).toMatch(/^src_/);
     expect(result.byteSize).toBe(content.byteLength);
     expect(result.storagePath).toBeTruthy();
+  });
+
+  it('extracts the text of an uploaded .txt/.md/.csv file', async () => {
+    // The upload route always hands over a Buffer, so a plain-text file used to
+    // be stored with no extracted text at all — the upload looked fine and
+    // analysis then failed with "no extractable content".
+    const content = Buffer.from('# Chain rule\n\nDifferentiate f(x) = (3x+1)^5.');
+    const result = await ingestUpload({
+      courseId,
+      kind: 'text',
+      filename: 'chain-rule.md',
+      mimeType: 'text/markdown',
+      content,
+    });
+
+    const doc = getSourceDocument(result.documentId);
+    expect(doc?.extractedText).toContain('Chain rule');
   });
 
   it('persists a text upload without a storage path', async () => {

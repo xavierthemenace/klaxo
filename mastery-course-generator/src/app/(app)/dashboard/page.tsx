@@ -98,6 +98,9 @@ export default function DashboardPage() {
   const [creating, setCreating] = useState(false);
   const [naming, setNaming] = useState(false);
   const [newTitle, setNewTitle] = useState('');
+  /** Course awaiting a second tap before it is deleted. */
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<SortOrder>('updated-desc');
 
@@ -177,6 +180,25 @@ export default function DashboardPage() {
       setCreating(false);
     }
   }, [router, newTitle]);
+
+  const handleDelete = useCallback(async (courseId: string) => {
+    setDeletingId(courseId);
+    setError(null);
+    try {
+      const res = await fetch(`/api/courses/${courseId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error ?? `Delete failed with status ${res.status}`);
+      }
+      setCourses((prev) => prev.filter((c) => c.id !== courseId));
+      setPendingDelete(null);
+    } catch (err) {
+      console.error('Failed to delete course:', err);
+      setError('We could not delete that course. Please try again.');
+    } finally {
+      setDeletingId(null);
+    }
+  }, []);
 
   const filteredCourses = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -472,6 +494,43 @@ export default function DashboardPage() {
                         Workspace
                       </Link>
                     </div>
+
+                    {/* Nothing in the UI could remove a course, so an abandoned
+                        one sat on this page forever. Two taps, in place — no
+                        browser dialog. */}
+                    {pendingDelete === course.id ? (
+                      <div className="rounded-lg border border-error/30 bg-error-subtle p-3">
+                        <p className="text-sm text-error-subtle-foreground">
+                          Delete &ldquo;{course.title}&rdquo; and everything written for it? This
+                          cannot be undone.
+                        </p>
+                        <div className="mt-3 flex gap-2">
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            loading={deletingId === course.id}
+                            onClick={() => handleDelete(course.id)}
+                          >
+                            Delete it
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setPendingDelete(null)}
+                          >
+                            Keep it
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setPendingDelete(course.id)}
+                        className="self-start text-xs font-medium text-muted-foreground underline-offset-4 hover:text-error hover:underline"
+                      >
+                        Delete this course
+                      </button>
+                    )}
                   </CardContent>
                 </Card>
               );

@@ -350,7 +350,11 @@ export function FileUpload({
                 next[i] = e.target.value;
                 setPrompts(next);
               }}
-              placeholder={`Instruction ${i + 1} (e.g., "Design an introductory statistics course…")`}
+              placeholder={
+                i === 0
+                  ? 'e.g. The chain rule, the product rule, and differentiating polynomials.'
+                  : 'Anything else this covers.'
+              }
               className="flex-1 min-h-[60px] rounded-md border border-input bg-background px-3 py-2 text-base placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
               rows={2}
             />

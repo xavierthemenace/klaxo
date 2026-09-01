@@ -172,6 +172,53 @@ export function getCourse(id: string) {
   return getDb().select().from(courses).where(eq(courses.id, id)).get();
 }
 
+/**
+ * Delete a course and everything hanging off it.
+ *
+ * The foreign keys are declared without ON DELETE CASCADE, and existing
+ * databases were created from that DDL, so SQLite refuses to drop a course that
+ * has any material at all. Rather than rewrite every table on upgrade, the
+ * children are removed here in reverse-dependency order inside one transaction.
+ */
+export function deleteCourseCascade(courseId: string): void {
+  const db = getDb();
+
+  // Leaves first, roots last: anything that references another row in this list
+  // must be deleted before the row it points at.
+  const orderedTables = [
+    questionAttempts,
+    masteryRecords,
+    provenance,
+    questions,
+    assessments,
+    practiceSets,
+    activities,
+    lessons,
+    objectiveDependencies,
+    objectives,
+    topics,
+    units,
+    blueprints,
+    knowledgePackages,
+    sourceFragments,
+    sourceDocuments,
+    qaResults,
+    generationEvents,
+    generationJobs,
+    userEdits,
+    courseEnrollments,
+    courseShares,
+    courseVersions,
+  ];
+
+  db.transaction((tx) => {
+    for (const table of orderedTables) {
+      tx.delete(table).where(eq(table.courseId, courseId)).run();
+    }
+    tx.delete(courses).where(eq(courses.id, courseId)).run();
+  });
+}
+
 export function listCoursesForUser(userId: string) {
   return getDb()
     .select()
@@ -930,6 +977,14 @@ export function listPracticeSets(courseId: string) {
     .all();
 }
 
+export function getPracticeSet(id: string) {
+  return getDb().select().from(practiceSets).where(eq(practiceSets.id, id)).get();
+}
+
+export function deletePracticeSet(id: string) {
+  return getDb().delete(practiceSets).where(eq(practiceSets.id, id)).run();
+}
+
 export function deletePracticeSetsByCourse(courseId: string) {
   return getDb().delete(practiceSets).where(eq(practiceSets.courseId, courseId)).run();
 }
@@ -973,6 +1028,14 @@ export function listAssessments(courseId: string) {
     .where(eq(assessments.courseId, courseId))
     .orderBy(asc(assessments.ordinal))
     .all();
+}
+
+export function getAssessment(id: string) {
+  return getDb().select().from(assessments).where(eq(assessments.id, id)).get();
+}
+
+export function deleteAssessment(id: string) {
+  return getDb().delete(assessments).where(eq(assessments.id, id)).run();
 }
 
 export function deleteAssessmentsByCourse(courseId: string) {
@@ -1054,6 +1117,10 @@ export function listQuestionsForObjective(objectiveId: string) {
     .where(eq(questions.objectiveId, objectiveId))
     .orderBy(asc(questions.ordinal))
     .all();
+}
+
+export function deleteQuestion(id: string) {
+  return getDb().delete(questions).where(eq(questions.id, id)).run();
 }
 
 export function deleteQuestionsByCourse(courseId: string) {
@@ -1357,6 +1424,20 @@ export function getGenerationJobByRequestKey(requestKey: string) {
     .from(generationJobs)
     .where(eq(generationJobs.requestKey, requestKey))
     .get();
+}
+
+/**
+ * Release a finished job's requestKey so the same request can be made again.
+ *
+ * `request_key` carries a unique index, so a dead job would otherwise hold its
+ * key forever and every retry would be handed the same failed job back.
+ */
+export function clearGenerationJobRequestKey(id: string) {
+  return getDb()
+    .update(generationJobs)
+    .set({ requestKey: null })
+    .where(eq(generationJobs.id, id))
+    .run();
 }
 
 export function listGenerationJobs(courseId: string) {

@@ -228,6 +228,20 @@ export function detectSourceConflicts(fragments: SourceFragmentEvidence[]): {
 /**
  * Analyze MULTIPLE source documents into a single structured KnowledgePackage.
  */
+/**
+ * Turn whatever the model cited into an index into `allFragments`.
+ *
+ * Fragments are shown to the model labelled `[source-0]`, `[source-1]`, … so it
+ * quite reasonably cites `"source-3"`. `Number("source-3")` is NaN, which used
+ * to drop every citation and leave the whole course with no source links at all.
+ */
+export function fragmentIndexFromRef(ref: unknown): number {
+  if (typeof ref === 'number') return ref;
+  if (typeof ref !== 'string') return -1;
+  const digits = ref.match(/\d+/);
+  return digits ? Number(digits[0]) : -1;
+}
+
 export async function analyzeSources(input: AnalyzeSourcesInput): Promise<SourceAnalysisResult> {
   const { provider, routing } = getAiContext();
   if (input.documentIds.length === 0) {
@@ -338,7 +352,7 @@ export async function analyzeSources(input: AnalyzeSourcesInput): Promise<Source
   const updatedAnalysis = { ...analysis };
   for (const obj of updatedAnalysis.objectives) {
     const sourceFragments = (obj.sourceFragmentIds ?? [])
-      .map((id) => allFragments[Number(id)])
+      .map((ref) => allFragments[fragmentIndexFromRef(ref)])
       .filter((f): f is SourceFragmentEvidence => f !== undefined);
     // Replace index-based refs with actual fragment IDs
     obj.sourceFragmentIds = sourceFragments.map((f) => f.id);

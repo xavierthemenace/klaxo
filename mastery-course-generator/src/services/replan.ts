@@ -19,6 +19,7 @@
  * is one restore away.
  */
 import {
+  createDependency,
   createObjective,
   createTopic,
   createUnit,
@@ -38,6 +39,9 @@ import {
   listUnits,
   updateLesson,
   updateObjective,
+  upsertBlueprint,
+  getLatestKnowledgePackage,
+  deleteDependenciesByCourse,
 } from '@/db/repo';
 import { getDb } from '@/db/index';
 import { newId } from '@/lib/ids';
@@ -95,6 +99,9 @@ export function mergeBlueprint(courseId: string, blueprint: CurriculumBlueprint)
     // objective id -> the new unit it now belongs to, so surviving lessons can
     // follow their objective across.
     const newUnitByObjective = new Map<string, string>();
+    // Objective code (and wording) -> database id, so the new plan's
+    // prerequisite edges can be rebuilt below.
+    const objectiveRefToId = new Map<string, string>();
 
     // Units and topics are cheap structure with nothing hanging off them, so
     // they are rebuilt outright. Objectives are the opposite, which is exactly
@@ -145,6 +152,8 @@ export function mergeBlueprint(courseId: string, blueprint: CurriculumBlueprint)
             classification: objective.classification,
           });
           newUnitByObjective.set(existing.id, unitId);
+          objectiveRefToId.set(code, existing.id);
+          objectiveRefToId.set(key, existing.id);
           summary.kept++;
         } else {
           const objectiveId = newId('obj');
@@ -163,6 +172,8 @@ export function mergeBlueprint(courseId: string, blueprint: CurriculumBlueprint)
             origin: 'AI_GENERATED',
           });
           newUnitByObjective.set(objectiveId, unitId);
+          objectiveRefToId.set(code, objectiveId);
+          objectiveRefToId.set(key, objectiveId);
           summary.added++;
           summary.addedObjectiveIds.push(objectiveId);
         }
@@ -233,6 +244,37 @@ export function mergeBlueprint(courseId: string, blueprint: CurriculumBlueprint)
       deleteProvenanceForEntity('unit', unit.id);
       deleteUnit(unit.id);
     }
+
+    // Rebuild the prerequisite graph from the new plan. Without this a replan
+    // left the course with whatever edges happened to survive.
+    deleteDependenciesByCourse(courseId);
+    for (const edge of blueprint.prerequisites ?? []) {
+      const from = objectiveRefToId.get(edge.objectiveId)
+        ?? objectiveRefToId.get(objectiveKey(edge.objectiveId));
+      const to = objectiveRefToId.get(edge.prerequisiteId)
+        ?? objectiveRefToId.get(objectiveKey(edge.prerequisiteId));
+      if (from && to && from !== to) {
+        createDependency({
+          id: newId('dep'),
+          courseId,
+          objectiveId: from,
+          prerequisiteId: to,
+          strength: edge.strength,
+          rationale: edge.rationale,
+        });
+      }
+    }
+
+    // The canonical snapshot has to move too. `loadPersistedBlueprint` reads
+    // it on every later build, so leaving the old one meant a replanned course
+    // was generated from the plan it had just replaced.
+    upsertBlueprint({
+      id: newId('bp'),
+      courseId,
+      payload: JSON.stringify(blueprint),
+      knowledgePackageId: getLatestKnowledgePackage(courseId)?.id ?? undefined,
+      status: 'approved',
+    });
   });
 
   logger.info('replan merged', {

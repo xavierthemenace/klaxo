@@ -146,3 +146,24 @@ export function humanizeKind(kind: string): string {
 export function unitDisplayTitle(title: string): string {
   return title.replace(/^unit\s*\d+\s*[:.\-–]\s*/i, '');
 }
+
+/**
+ * Plain-English label for a lesson's stored status.
+ *
+ * The raw values ('generated', 'regenerated') were being printed straight onto
+ * the screen under each lesson title.
+ */
+export function lessonStatusLabel(status: string | null | undefined): string {
+  switch (status) {
+    case 'generated':
+      return 'Written';
+    case 'regenerated':
+      return 'Rewritten after marking';
+    case 'edited':
+      return 'Edited by you';
+    case 'draft':
+      return 'Draft';
+    default:
+      return status ? 'Written' : '';
+  }
+}

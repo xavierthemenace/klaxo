@@ -160,8 +160,8 @@ const GENERATION_PIPELINE: { stage: string; label: string }[] = [
   { stage: 'lessons', label: 'Lessons' },
   { stage: 'practice', label: 'Practice' },
   { stage: 'assessments', label: 'Assessments' },
-  { stage: 'revision', label: 'QA & Revision' },
-  { stage: 'complete', label: 'Mastered' },
+  { stage: 'revision', label: 'Marking' },
+  { stage: 'complete', label: 'Done' },
 ];
 
 const TERMINAL_STATES = new Set(['COMPLETED', 'FAILED', 'CANCELLED']);
@@ -185,6 +185,7 @@ export default function WizardPage() {
   const [subjectDomain, setSubjectDomain] = useState('');
   const [targetLevel, setTargetLevel] = useState('');
   const [preferencesNote, setPreferencesNote] = useState('');
+  const [preferencesError, setPreferencesError] = useState<string | null>(null);
 
   // Navigation / stepper.
   const [currentStep, setCurrentStep] = useState<StepId>('info');
@@ -204,6 +205,7 @@ export default function WizardPage() {
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [analysisMessage, setAnalysisMessage] = useState('');
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [knowledgePackage, setKnowledgePackage] = useState<KnowledgePackage | null>(null);
   const [fragments, setFragments] = useState<SourceFragment[]>([]);
   const [editTitle, setEditTitle] = useState('');
@@ -275,12 +277,15 @@ export default function WizardPage() {
       const idx = STEP_KEYS.indexOf(step);
       const currentIdx = STEP_KEYS.indexOf(currentStep);
       if (idx <= currentIdx) return true;
+      // A step that failed has to be dealt with first. Walking past it just
+      // lands on a screen that says "No interpretation approved yet".
+      if (errorSteps.includes(currentStep)) return false;
       // Forward navigation is allowed only into the immediate next step.
       if (idx === currentIdx + 1) return true;
       // Or into any already-completed step.
       return completedSteps.includes(step);
     },
-    [currentStep, completedSteps],
+    [currentStep, completedSteps, errorSteps],
   );
 
   const goToStep = useCallback(
@@ -323,7 +328,9 @@ export default function WizardPage() {
   }, [courseId]);
 
   const saveCourse = useCallback(
-    async (patch: Record<string, string>) => {
+    // Returns whether the save actually landed, so callers never tick a step
+    // green off the back of a rejected request.
+    async (patch: Record<string, unknown>): Promise<boolean> => {
       setSaving(true);
       try {
         const res = await fetch(`/api/courses/${courseId}`, {
@@ -337,8 +344,10 @@ export default function WizardPage() {
           setCourse(data.course);
           courseRef.current = data.course;
         }
+        return true;
       } catch {
         // Non-fatal autosave error; leave local state intact.
+        return false;
       } finally {
         if (mountedRef.current) setSaving(false);
       }
@@ -486,6 +495,7 @@ export default function WizardPage() {
     setAnalyzing(true);
     setAnalysisProgress(0);
     setAnalysisMessage('Starting analysis…');
+    setAnalysisError(null);
     setStepError('understanding', false);
     try {
       const res = await fetch(`/api/courses/${courseId}/analyze`, {
@@ -513,11 +523,13 @@ export default function WizardPage() {
         (job) => {
           setStepError('understanding', true);
           setAnalysisMessage(job.message ?? 'Analysis failed');
+          setAnalysisError(job.message ?? 'It could not read your material.');
         },
       );
     } catch (err) {
       setStepError('understanding', true);
       setAnalysisMessage((err as Error).message);
+      setAnalysisError((err as Error).message);
     } finally {
       setAnalyzing(false);
     }
@@ -559,8 +571,16 @@ export default function WizardPage() {
   };
 
   const handleSavePreferences = async () => {
-    await saveCourse({ preferences: JSON.stringify({ note: preferencesNote }) });
-    markCompleted('preferences');
+    // The API takes an object here and stringifies it itself. Sending a string
+    // was rejected with a 400 and the tick below still ran, so the step looked
+    // saved when nothing had been.
+    const ok = await saveCourse({ preferences: { note: preferencesNote } });
+    if (ok) {
+      setPreferencesError(null);
+      markCompleted('preferences');
+    } else {
+      setPreferencesError('That did not save. Try again.');
+    }
   };
 
   const handleGenerateBlueprint = async () => {
@@ -820,7 +840,16 @@ export default function WizardPage() {
             title="Add your material"
             description="Notes, slides, chapters, past papers, a photo of a page. Or just type what the topic covers."
           >
-            <FileUpload courseId={courseId} onSourcesChange={setSources} />
+            <FileUpload
+              courseId={courseId}
+              onSourcesChange={(next) => {
+                setSources(next);
+                // Tick the step as soon as there is material. It used to be
+                // marked only inside restoreProgress, which runs on page load,
+                // so "Your material" stayed unticked all the way to the end.
+                if (next.length > 0) markCompleted('sources');
+              }}
+            />
             {sources.length > 0 && (
               <div className="mt-4 flex items-center gap-2">
                 <Badge variant="success" dot>
@@ -873,12 +902,29 @@ export default function WizardPage() {
                 <CardContent className="pt-6 text-center">
                   <p className="text-muted-foreground mb-4">
                     {sources.length === 0
-                      ? 'Upload at least one source before analyzing.'
-                      : 'Analyze your sources to extract the course structure.'}
+                      ? 'Add some material first, on the step before this one.'
+                      : 'Read your material, so it knows what you are studying.'}
                   </p>
                   <Button onClick={handleAnalyze} disabled={sources.length === 0} loading={analyzing}>
-                    Read my material
+                    {analysisError ? 'Try again' : 'Read my material'}
                   </Button>
+
+                  {/* Rendered outside the `analyzing` guard on purpose: the guard
+                      unmounts the moment the job settles, so an error shown there
+                      would vanish before anyone could read it. */}
+                  {analysisError && (
+                    <div className="mx-auto mt-6 max-w-[52ch] rounded-lg border border-error/30 bg-error-subtle p-4 text-left">
+                      <p className="text-sm font-semibold text-error-subtle-foreground">
+                        It could not read your material.
+                      </p>
+                      <p className="mt-1.5 text-sm text-error-subtle-foreground">{analysisError}</p>
+                      <div className="mt-4">
+                        <Button variant="outline" size="sm" onClick={() => goToStep('sources')}>
+                          Back to your material
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )}
@@ -938,12 +984,15 @@ export default function WizardPage() {
                   onChange={(e) => setPreferencesNote(e.target.value)}
                   onBlur={handleSavePreferences}
                   rows={4}
-                  placeholder="Go slowly on the maths. Use examples from real breaches."
+                  placeholder="Go slowly on the hard parts, and use plenty of worked examples."
                   hint="Leave it blank if you have nothing to add."
                 />
+                {preferencesError && (
+                  <p className="mt-3 text-sm font-medium text-error">{preferencesError}</p>
+                )}
               </CardContent>
               <CardFooter>
-                <Button onClick={handleSavePreferences} variant="secondary" size="sm">
+                <Button onClick={handleSavePreferences} variant="outline" size="sm">
                   Save
                 </Button>
               </CardFooter>
@@ -954,7 +1003,7 @@ export default function WizardPage() {
         {currentStep === 'blueprint' && (
           <WizardStep
             title="The plan"
-            description="The order it will teach things in, so nothing comes before what it depends on. Change it here if you disagree."
+            description="The order it will teach things in, so nothing comes before what it depends on."
           >
             {!workspace || workspace.units.length === 0 ? (
               <Card>
@@ -1007,8 +1056,8 @@ export default function WizardPage() {
 
         {currentStep === 'generation' && (
           <WizardStep
-            title="Course Generation"
-            description="Generate lessons, practice, and assessments through the full pipeline."
+            title="Write it"
+            description="Now it writes the lessons, the practice and the questions. This takes a few minutes."
           >
             <GenerationPipeline
               stage={generationStage}
@@ -1022,7 +1071,7 @@ export default function WizardPage() {
 
         {currentStep === 'qa' && (
           <WizardStep
-            title="Quality Assurance"
+            title="Marking"
             description="A second pass reads the course back and rewrites the weak parts. This is what it found."
           >
             <QaSummary workspace={workspace} warning={qaWarning} courseId={courseId} />
@@ -1292,7 +1341,12 @@ function BlueprintReview(props: { workspace: WorkspaceData }) {
                 {u.description && (
                   <CardDescription>{u.description}</CardDescription>
                 )}
-                <Badge variant="outline">{u.classification}</Badge>
+                {/* Wrapped: CardHeader is a stretch column, so a bare badge
+                    stretched the full width of the card and read as a broken
+                    progress bar. */}
+                <div>
+                  <Badge variant="outline">{u.classification}</Badge>
+                </div>
               </CardHeader>
               <CardContent>
                 {objs.length > 0 ? (
@@ -1337,10 +1391,10 @@ function GenerationPipeline(props: {
       <Card>
         <CardContent className="pt-6 text-center">
           <p className="text-muted-foreground mb-4">
-            Generate the full course. This will create lessons, practice, assessments, and run QA.
+            This writes a lesson, practice questions and a test for everything in the plan.
           </p>
           <Button onClick={onGenerate} loading={generating}>
-            Generate Course
+            Write the course
           </Button>
         </CardContent>
       </Card>
@@ -1352,7 +1406,10 @@ function GenerationPipeline(props: {
       <div className="mb-2 h-2 w-full rounded-full bg-muted overflow-hidden">
         <div
           className="h-full bg-primary transition-all"
-          style={{ width: `${Math.round(progress * 100)}%` }}
+          // Once the pipeline says it is done the bar is full, whatever the
+          // last progress number happened to be. It used to read "Generation
+          // complete" over a bar about a fifth of the way along.
+          style={{ width: `${isComplete ? 100 : Math.round(progress * 100)}%` }}
         />
       </div>
       <ol className="space-y-3">
@@ -1396,7 +1453,7 @@ function GenerationPipeline(props: {
         })}
       </ol>
       {!generating && stage === 'complete' && (
-        <p className="text-sm text-muted-foreground">Generation complete.</p>
+        <p className="text-sm text-muted-foreground">All written.</p>
       )}
     </div>
   );

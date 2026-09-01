@@ -87,12 +87,18 @@ export async function generateBlueprint(courseId: string): Promise<CurriculumBlu
  * Creates provenance records with REAL database entity IDs and source fragment IDs
  * from the approved knowledge package.
  */
+/** Loose key for matching an objective by its wording. */
+function normaliseObjectiveKey(text: string): string {
+  return text.trim().toLowerCase().replace(/\s+/g, ' ').replace(/[.;:]+$/, '');
+}
+
 export async function persistBlueprint(courseId: string, blueprint: CurriculumBlueprint): Promise<void> {
   const kp = getLatestKnowledgePackage(courseId);
 
   const unitIdMap = new Map<number, string>();
   const objectiveIdMap = new Map<string, { dbId: string; ordinal: number }>();
   const objectiveFragmentMap = new Map<string, string[]>(); // statement -> fragmentIds
+  const objectiveStatementMap = new Map<string, { dbId: string; ordinal: number }>();
 
   // Load fragment references from knowledge package if available.
   if (kp) {
@@ -178,6 +184,13 @@ export async function persistBlueprint(courseId: string, blueprint: CurriculumBl
         origin: 'AI_GENERATED',
       });
       objectiveIdMap.set(code, { dbId: objectiveId, ordinal: o });
+      // Models regularly cite an objective by its wording rather than its id,
+      // even when asked for the id. Accept both, so an edge is not silently
+      // dropped over a naming difference.
+      objectiveStatementMap.set(normaliseObjectiveKey(obj.statement), {
+        dbId: objectiveId,
+        ordinal: o,
+      });
 
       // Create provenance for objective with REAL database ID and fragment references
       if (kp) {
@@ -219,9 +232,12 @@ export async function persistBlueprint(courseId: string, blueprint: CurriculumBl
   }
 
   // Dependencies.
+  const resolveObjectiveRef = (ref: string) =>
+    objectiveIdMap.get(ref) ?? objectiveStatementMap.get(normaliseObjectiveKey(ref));
+
   for (const edge of blueprint.prerequisites) {
-    const from = objectiveIdMap.get(edge.objectiveId);
-    const to = objectiveIdMap.get(edge.prerequisiteId);
+    const from = resolveObjectiveRef(edge.objectiveId);
+    const to = resolveObjectiveRef(edge.prerequisiteId);
     if (from && to && from.dbId !== to.dbId) {
       createDependency({
         id: `dep_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
@@ -473,7 +489,15 @@ export function persistAssessment(
   courseId: string,
   unitId: string | undefined,
   assessment: Assessment,
+  /**
+   * The real objective ids the assessment was generated for. The model's own
+   * `objectiveIds` are free text, so these are what actually get stored — every
+   * question needs one or answering it is rejected as invalid input.
+   */
+  objectiveIds: string[] = [],
 ) {
+  const linkedObjectiveIds = objectiveIds.length > 0 ? objectiveIds : assessment.objectiveIds;
+
   const asm = createAssessment({
     id: `asm_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
     courseId,
@@ -481,13 +505,13 @@ export function persistAssessment(
     kind: assessment.kind,
     title: assessment.title,
     instructions: assessment.instructions,
-    objectiveIds: JSON.stringify(assessment.objectiveIds),
+    objectiveIds: JSON.stringify(linkedObjectiveIds),
     passThreshold: assessment.passThreshold,
     origin: 'AI_GENERATED',
   });
 
   // Create provenance linking assessment to its objectives
-  for (const objId of assessment.objectiveIds) {
+  for (const objId of linkedObjectiveIds) {
     createProvenance({
       id: `prov_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
       courseId,
@@ -500,10 +524,18 @@ export function persistAssessment(
 
   let ordinal = 0;
   for (const q of assessment.questions) {
+    // Spread the questions across the objectives being assessed. Something has
+    // to be set here: the answer-submission API requires an objective id, and
+    // mastery is tracked per objective.
+    const questionObjectiveId = linkedObjectiveIds.length > 0
+      ? linkedObjectiveIds[ordinal % linkedObjectiveIds.length]
+      : undefined;
+
     const question = createQuestion({
       id: `q_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
       courseId,
       assessmentId: asm.id,
+      objectiveId: questionObjectiveId,
       ordinal: ordinal++,
       kind: q.kind,
       level: 'independent',
@@ -518,7 +550,7 @@ export function persistAssessment(
     });
 
     // Create provenance linking question to its objectives
-    for (const objId of assessment.objectiveIds) {
+    for (const objId of linkedObjectiveIds) {
       createProvenance({
         id: `prov_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
         courseId,

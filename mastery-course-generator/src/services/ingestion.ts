@@ -156,6 +156,13 @@ export async function ingestUpload(input: UploadInput): Promise<UploadResult> {
     storagePath = resolve(process.cwd(), env.UPLOAD_DIR, `${id}_${safeName}`);
     writeFileSync(storagePath, input.content);
 
+    // Plain-text formats (.txt, .md, .csv) arrive as a Buffer from the upload
+    // route just like binaries do. Decode them here, or nothing is ever stored
+    // and analysis later fails with "no extractable content".
+    if (input.kind === 'text') {
+      extractedText = input.content.toString('utf8');
+    }
+
     // Extract text from document files (DOCX, RTF, DOC)
     if (input.kind === 'document' && input.mimeType) {
       try {

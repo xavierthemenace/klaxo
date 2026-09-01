@@ -43,7 +43,7 @@ Return JSON with this exact shape (no other keys):
   "subject": string,
   "level": string,
   "summary": string,
-  "units": [{ "title": string, "ordinal": number, "description"?: string, "classification": "REQUIRED"|"PREREQUISITE"|"RECOMMENDED"|"ENRICHMENT", "objectiveIds": string[] }],
+  "units": [{ "title": string, "ordinal": number, "description"?: string, "classification": "REQUIRED"|"PREREQUISITE"|"RECOMMENDED"|"ENRICHMENT" }],
   "objectives": [{ "statement": string, "category": string, "difficulty": number (1-5), "importance": number (1-5), "classification": "REQUIRED"|"PREREQUISITE"|"RECOMMENDED"|"ENRICHMENT", "sourceFragmentIds": string[] }],
   "terminology": [{ "term": string, "definition"?: string, "domain"?: string }],
   "requirements": string[],
@@ -51,6 +51,11 @@ Return JSON with this exact shape (no other keys):
   "ambiguities": [{ "id": string, "location"?: string, "description": string, "confidence": number (0-1), "suggestion"?: string }],
   "confidence": number (0-1)
 }
+
+Each excerpt of the material is labelled \`[source-0]\`, \`[source-1]\` and so on.
+In "sourceFragmentIds", list the labels of the excerpts an objective came from,
+exactly as written — for example ["source-0", "source-3"]. Never put the
+excerpt's text there.
 
 Every objective must be measurable (not vague like "understand X"). If you are
 uncertain about any extraction, flag it in "ambiguities" rather than guessing.
@@ -72,32 +77,21 @@ Return JSON with this shape:
     "title": string, "description"?: string,
     "classification": "REQUIRED"|"PREREQUISITE"|"RECOMMENDED"|"ENRICHMENT",
     "topics": [{ "title": string, "description"?: string, "classification": "REQUIRED"|"PREREQUISITE"|"RECOMMENDED"|"ENRICHMENT" }],
-    "objectives": [{ "statement": string, "category": string, "difficulty": number, "importance": number, "classification": "REQUIRED"|"PREREQUISITE"|"RECOMMENDED"|"ENRICHMENT", "prerequisites": string[] }],
+    "objectives": [{ "id": string, "statement": string, "category": string, "difficulty": number, "importance": number, "classification": "REQUIRED"|"PREREQUISITE"|"RECOMMENDED"|"ENRICHMENT" }],
     "estimatedMinutes"?: number
   }],
   "prerequisites": [{ "objectiveId": string, "prerequisiteId": string, "strength": "required"|"helpful", "rationale"?: string }],
   "estimatedMinutes"?: number
 }
 
+Give every objective an "id" of the form "U<unit number>.O<objective number>",
+counting from 1 in the order you list them — the first objective of the second
+unit is "U2.O1". In "prerequisites", "objectiveId" and "prerequisiteId" must
+both be one of those ids, never the objective's statement text. Leave
+"prerequisites" as [] only if nothing genuinely depends on anything else.
+
 Order units by prerequisite dependencies. Never silently convert enrichment
 material into required material — preserve the classification exactly.
-${JSON_OUTPUT_RULES}`;
-
-/** System prompt for PREREQUISITE / DEPENDENCY ANALYSIS. */
-export const PREREQUISITE_SYSTEM = `You are a prerequisite-dependency analyst.
-Analyze learning objectives and identify the prerequisite graph.
-
-${INJECTION_GUARD}
-
-Return JSON:
-{
-  "dependencies": [{ "objective": number (index), "prerequisite": number (index), "strength": "required"|"helpful", "rationale": string }],
-  "cycles": [string[]],
-  "issues": [{ "type": "missing_prerequisite"|"cycle"|"difficulty_jump"|"bad_order", "description": string, "objective": number }]
-}
-
-Detect missing prerequisites, dependency cycles, unreasonable sequencing, and
-major difficulty jumps.
 ${JSON_OUTPUT_RULES}`;
 
 /** System prompt for LESSON GENERATION. */
@@ -197,14 +191,12 @@ ordering, duplicate lessons, repetition, difficulty progression, missing
 prerequisites, missing assessments, malformed content, inconsistent terminology,
 invalid equations, invalid answer keys, obvious hallucinations, and improper
 enrichment classification.
-${JSON_OUTPUT_RULES}`;
 
-/** System prompt for REVISION (targeted regeneration). */
-export const REVISION_SYSTEM = `You are a curriculum revision specialist.
-Fix specific QA failures in generated content.
-
-${INJECTION_GUARD}
-
-Given the original content and the specific QA failure, revise ONLY the affected
-entity. Return JSON with the corrected content matching the requested schema. 
+Set "autoFixable": true only when "checkKey" is one of these — they are the only
+failures anything downstream knows how to repair, and a true on anything else
+just burns a repair pass for nothing:
+objective_assessment_alignment, objective_lesson_coverage, duplicate_lessons,
+duplicate_questions, invalid_equations, empty_lesson_content,
+assessment_without_questions, practice_set_without_questions.
+For every other check, set "autoFixable": false.
 ${JSON_OUTPUT_RULES}`;

@@ -11,7 +11,8 @@ import { requireUserId } from '@/lib/auth';
 import { getCourse, listSourceDocuments } from '@/db/repo';
 import { notFound, badRequest, toAppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
-import { startJob, runJob } from '@/pipeline/orchestrator';
+import { startJob } from '@/pipeline/orchestrator';
+import { runClaimedJob } from '@/pipeline/job-runner';
 
 const AnalyzeSchema = z.object({
   documentIds: z.array(z.string().min(1)).min(1).max(50),
@@ -64,8 +65,10 @@ export async function POST(
     });
 
     if (created) {
-      // Fire-and-forget; progress is persisted. Failures are recorded on the job.
-      runJob(jobId).catch((err) => {
+      // Go through the same atomic claim as every other job. Calling runJob
+      // directly let a deployed worker and this request execute the same job at
+      // once, writing fragments and knowledge packages twice.
+      void runClaimedJob(jobId).catch((err) => {
         logger.error('Analyze job failed', { jobId, error: (err as Error).message });
       });
     }

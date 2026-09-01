@@ -146,7 +146,14 @@ describe('dropNulls', () => {
   });
 
   it('lets a practice set with a null objectiveId validate', () => {
-    const reply = { title: 'Set', level: 'guided', objectiveId: null, questions: [] };
+    const reply = {
+      title: 'Set',
+      level: 'guided',
+      objectiveId: null,
+      // A practice set now has to actually contain a question, so this fixture
+      // carries one — the point of the test is the null objectiveId.
+      questions: [{ kind: 'short_answer', prompt: 'State the chain rule.' }],
+    };
     expect(PracticeSetSchema.safeParse(reply).success).toBe(false);
     expect(PracticeSetSchema.safeParse(dropNulls(reply)).success).toBe(true);
   });

@@ -9,10 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { requireUserId } from '@/lib/auth';
 import { requireCourseAccess } from '@/lib/course-access';
-import { getDb } from '@/db';
-import { courses } from '@/db/schema';
-import { eq } from 'drizzle-orm';
-import { getCourse, updateCourse } from '@/db/repo';
+import { getCourse, updateCourse, deleteCourseCascade } from '@/db/repo';
 import { notFound, toAppError } from '@/lib/errors';
 
 const UpdateCourseSchema = z.object({
@@ -109,8 +106,9 @@ export async function DELETE(
       throw notFound('Course not found');
     }
 
-    const db = getDb();
-    db.delete(courses).where(eq(courses.id, id)).run();
+    // Removes the course's material too — deleting the row on its own trips a
+    // FOREIGN KEY constraint for any course that has been worked on.
+    deleteCourseCascade(id);
 
     return NextResponse.json({ success: true });
   } catch (err) {

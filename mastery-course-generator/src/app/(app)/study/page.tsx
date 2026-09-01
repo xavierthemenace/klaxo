@@ -10,7 +10,7 @@
  */
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Button } from '@/components/ui/Button';
+import { Button, buttonClasses } from '@/components/ui/Button';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Skeleton } from '@/components/ui/Skeleton';
 
@@ -211,11 +211,16 @@ function StudyCard({ item }: { item: CourseStudy }) {
           <div className="flex flex-wrap gap-2.5">
             {ready ? (
               <>
-                <Link href={`/workspace/${course.id}?tab=practice`}>
-                  <Button>Practice</Button>
+                {/* Real links, styled as buttons, so they can be opened in a
+                    new tab like any other link on the page. */}
+                <Link href={`/workspace/${course.id}?tab=practice`} className={buttonClasses()}>
+                  Practice
                 </Link>
-                <Link href={`/workspace/${course.id}?tab=mastery`}>
-                  <Button variant="outline">Progress</Button>
+                <Link
+                  href={`/workspace/${course.id}?tab=mastery`}
+                  className={buttonClasses('outline')}
+                >
+                  Progress
                 </Link>
               </>
             ) : (

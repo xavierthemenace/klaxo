@@ -4,7 +4,7 @@ import { randomUUID, createHash } from 'node:crypto';
 export type IdPrefix =
   | 'usr' | 'crs' | 'ver' | 'doc' | 'frg' | 'kp' | 'unt' | 'top'
   | 'obj' | 'les' | 'act' | 'qst' | 'set' | 'asm' | 'mas' | 'dep'
-  | 'prv' | 'qa' | 'job' | 'evt' | 'edt' | 'att' | 'vis';
+  | 'prv' | 'qa' | 'job' | 'evt' | 'edt' | 'att' | 'vis' | 'bp';
 
 export function newId(prefix: IdPrefix): string {
   return `${prefix}_${randomUUID().replace(/-/g, '').slice(0, 24)}`;

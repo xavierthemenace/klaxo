@@ -27,6 +27,25 @@ export interface QuestionCardProps {
   courseId: string;
   /** Resolve the objective statement for display, if known. */
   objectiveStatement?: string | null;
+  /**
+   * Called after an answer is recorded, so the page can refresh whatever it
+   * showed about mastery. Without it the Mastery tab kept saying "no activity"
+   * immediately after answering, and only a reload fixed it.
+   */
+  onAnswered?: () => void;
+  /**
+   * The last answer recorded for this question, if there is one. Reloading the
+   * page used to bring a question back completely blank, with nothing to say
+   * it had already been answered.
+   */
+  previousAttempt?: PreviousAttempt | null;
+}
+
+/** The shape the workspace API returns for a recorded attempt. */
+export interface PreviousAttempt {
+  isCorrect: number;
+  score: number;
+  createdAt: number;
 }
 
 type Feedback = {
@@ -41,6 +60,8 @@ export default function QuestionCard({
   question,
   courseId,
   objectiveStatement,
+  onAnswered,
+  previousAttempt,
 }: QuestionCardProps) {
   const choices = useMemo(() => parseChoices(question.choices), [question.choices]);
   const answerKey = useMemo(() => parseAnswerKey(question.answerKey), [question.answerKey]);
@@ -127,12 +148,13 @@ export default function QuestionCard({
       }
       const isCorrect = Boolean(data.attempt?.isCorrect);
       setFeedback({ isCorrect, result: data as AttemptResult });
+      onAnswered?.();
     } catch (err) {
       setRequestError(err instanceof Error ? err.message : 'Network error');
     } finally {
       setSubmitting(false);
     }
-  }, [canSubmit, submitting, feedback, buildResponse, courseId, question.id, question.objectiveId]);
+  }, [canSubmit, submitting, feedback, buildResponse, courseId, question.id, question.objectiveId, onAnswered]);
 
   const toggleOrder = useCallback((item: string) => {
     setFeedback(null);
@@ -270,6 +292,17 @@ export default function QuestionCard({
             }}
             placeholder="Type your answer"
           />
+        </div>
+      )}
+
+      {previousAttempt && !feedback && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-secondary/60 p-3">
+          <Badge variant={previousAttempt.isCorrect ? 'success' : 'error'}>
+            {previousAttempt.isCorrect ? 'You got this right' : 'You got this wrong'}
+          </Badge>
+          <span className="text-sm text-muted-foreground">
+            Answer it again to have another go.
+          </span>
         </div>
       )}
 

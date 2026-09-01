@@ -115,7 +115,14 @@ export class MockProvider implements AIProvider {
     // Check for images in messages for vision mock
     const hasImages = request.messages.some(m => m.images && m.images.length > 0);
     
-    const prompt = request.messages.map((m) => m.content).join('\n').toLowerCase();
+    // Match on the system prompt only. Matching the whole conversation meant a
+    // course whose objective mentioned the word "blueprint" was handed the
+    // blueprint fixture when it asked for a lesson.
+    const prompt = request.messages
+      .filter((m) => m.role === 'system')
+      .map((m) => m.content)
+      .join('\n')
+      .toLowerCase();
 
     // Vision mock for image analysis (source extraction with images)
     if (hasImages && prompt.includes('source analyst')) {
@@ -155,8 +162,10 @@ export class MockProvider implements AIProvider {
           { title: 'Unit 2: Application', ordinal: 1, description: 'Applying knowledge.', classification: 'REQUIRED', objectiveIds: [] },
         ],
         objectives: [
-          { statement: 'Define foundational terms accurately.', category: 'knowledge', difficulty: 2, importance: 3, classification: 'REQUIRED', sourceFragmentIds: [] },
-          { statement: 'Apply foundational concepts to novel situations.', category: 'skill', difficulty: 3, importance: 4, classification: 'REQUIRED', sourceFragmentIds: [] },
+          // Cited the way a real model cites them: the label it was shown,
+          // not a bare array index.
+          { statement: 'Define foundational terms accurately.', category: 'knowledge', difficulty: 2, importance: 3, classification: 'REQUIRED', sourceFragmentIds: ['source-0'] },
+          { statement: 'Apply foundational concepts to novel situations.', category: 'skill', difficulty: 3, importance: 4, classification: 'REQUIRED', sourceFragmentIds: ['source-0'] },
         ],
         terminology: [
           { term: 'concept', definition: 'An abstract idea', domain: 'general' },
@@ -170,7 +179,7 @@ export class MockProvider implements AIProvider {
     }
 
     // Curriculum blueprint mock.
-    if (prompt.includes('blueprint')) {
+    if (prompt.includes('curriculum architect')) {
       return JSON.stringify({
         title: 'Sample Course: Introduction to Concepts',
         description: 'A comprehensive introduction.',
@@ -182,7 +191,7 @@ export class MockProvider implements AIProvider {
             description: 'Laying the groundwork.',
             classification: 'REQUIRED',
             topics: [{ title: 'Core Concepts', description: 'Basic definitions', classification: 'REQUIRED' }],
-            objectives: [{ statement: 'Define foundational terms accurately.', category: 'knowledge', difficulty: 2, importance: 3, classification: 'REQUIRED', prerequisites: [] }],
+            objectives: [{ id: 'U1.O1', statement: 'Define foundational terms accurately.', category: 'knowledge', difficulty: 2, importance: 3, classification: 'REQUIRED' }],
             estimatedMinutes: 120,
           },
           {
@@ -190,11 +199,13 @@ export class MockProvider implements AIProvider {
             description: 'Applying knowledge.',
             classification: 'REQUIRED',
             topics: [{ title: 'Practical Use', description: 'Real-world applications', classification: 'REQUIRED' }],
-            objectives: [{ statement: 'Apply foundational concepts to novel situations.', category: 'skill', difficulty: 3, importance: 4, classification: 'REQUIRED', prerequisites: ['Define foundational terms accurately.'] }],
+            objectives: [{ id: 'U2.O1', statement: 'Apply foundational concepts to novel situations.', category: 'skill', difficulty: 3, importance: 4, classification: 'REQUIRED' }],
             estimatedMinutes: 120,
           },
         ],
-        prerequisites: [],
+        prerequisites: [
+          { objectiveId: 'U2.O1', prerequisiteId: 'U1.O1', strength: 'required', rationale: 'Foundations come first.' },
+        ],
         estimatedMinutes: 240,
         classifications: { required: [], prerequisite: [], recommended: [], enrichment: [] },
       });
@@ -205,6 +216,9 @@ export class MockProvider implements AIProvider {
       return JSON.stringify({
         objectives: [],
         sections: [
+          // Not in the enum on purpose: instructional-design models really do
+          // write "introduction", and one label must not fail a whole lesson.
+          { type: 'introduction', title: 'Introduction', content: 'What this lesson covers.' },
           { type: 'motivation', title: 'Why this matters', content: 'Understanding this concept unlocks deeper learning.' },
           { type: 'explanation', title: 'Core Explanation', content: 'The main idea explained clearly.' },
           { type: 'example', title: 'Worked Example', content: 'Here is a step-by-step example.' },
@@ -240,6 +254,16 @@ export class MockProvider implements AIProvider {
             level: 'independent',
             difficulty: 2,
           },
+          {
+            kind: 'numeric',
+            prompt: 'How many foundational terms were defined?',
+            // A bare number, the way a model answers a numeric question.
+            answerKey: 4,
+            explanation: 'Four terms were listed.',
+            expectedSkill: 'recall',
+            level: 'independent',
+            difficulty: 2,
+          },
         ],
       });
     }
@@ -266,6 +290,14 @@ export class MockProvider implements AIProvider {
             expectedSkill: 'recall',
             difficulty: 2,
           },
+          {
+            kind: 'short_answer',
+            prompt: 'Apply the concept to a situation of your own choosing.',
+            answerKey: 'Any correct application of the concept.',
+            explanation: 'Marks are for a correct application, not wording.',
+            expectedSkill: 'transfer',
+            difficulty: 3,
+          },
         ],
         passThreshold: 0.8,
       });
@@ -277,19 +309,11 @@ export class MockProvider implements AIProvider {
         checks: [
           { checkKey: 'source_coverage', severity: 'info', status: 'pass', message: 'All source material covered.' },
           { checkKey: 'objective_assessment_alignment', severity: 'info', status: 'pass', message: 'All objectives have assessments.' },
+          // A failing, auto-fixable check, so the revision loop is exercised
+          // rather than skipped entirely under mock.
+          { checkKey: 'empty_lesson_content', severity: 'warning', status: 'fail', message: 'A lesson looks thin.', autoFixable: true },
         ],
-        summary: 'All QA checks passed (mock).',
-      });
-    }
-
-    // Prerequisite/dependency analysis mock.
-    if (prompt.includes('prereq') || prompt.includes('depend')) {
-      return JSON.stringify({
-        dependencies: [
-          { objective: 1, prerequisite: 0, strength: 'required', rationale: 'Must know foundations first.' },
-        ],
-        cycles: [],
-        issues: [],
+        summary: 'QA run complete (mock).',
       });
     }
 

@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import {
   getGenerationJob,
   getGenerationJobByRequestKey,
+  clearGenerationJobRequestKey,
   createGenerationJob,
   updateGenerationJob,
   createGenerationEvent,
@@ -107,7 +108,14 @@ export function startJob(input: StartJobInput): { jobId: string; created: boolea
     : undefined;
 
   if (existing) {
-    return { jobId: existing.id, created: false };
+    // A job that finished badly must not block the same request forever.
+    // Retrying is the whole point, so let go of its request key and start a
+    // fresh job instead of handing back the dead one.
+    if (existing.state === 'FAILED' || existing.state === 'CANCELLED') {
+      clearGenerationJobRequestKey(existing.id);
+    } else {
+      return { jobId: existing.id, created: false };
+    }
   }
 
   const jobId = `job_${randomUUID().replace(/-/g, '').slice(0,24)}`;
@@ -261,7 +269,7 @@ export async function executeGenerateCourseJob(jobId: string, courseId: string):
     const unitObjectiveIds = objectives.map((o) => o.id);
     if (unitObjectiveIds.length > 0) {
       const assessment = await generateAssessment(courseId, unitObjectiveIds, 'unit');
-      persistAssessment(courseId, undefined, assessment);
+      persistAssessment(courseId, undefined, assessment, unitObjectiveIds);
     }
 
     // 4. QA + bounded, targeted revision loop.
@@ -281,6 +289,18 @@ export async function executeGenerateCourseJob(jobId: string, courseId: string):
         `Repaired ${repair.repaired} issue(s), skipped ${repair.skipped}.`,
         ordinal++,
       );
+
+      // If a pass repaired nothing, the remaining issues have no repair case
+      // and never will. Running the loop again only burns another full QA pass
+      // (including an AI call) to reach exactly the same place.
+      if (repair.repaired === 0) {
+        await emit(
+          jobId, courseId, 'revision',
+          'Nothing left that can be fixed automatically; stopping revision.',
+          ordinal++, 'warn',
+        );
+        break;
+      }
 
       // Re-run QA on the impacted curriculum.
       qa = await runQa(courseId, jobId, revisionPass + 1);
@@ -326,6 +346,10 @@ export async function executeGenerateCourseJob(jobId: string, courseId: string):
       await emit(jobId, courseId, 'complete', 'Course ready.', ordinal++);
     }
   } catch (err) {
+    // A cancellation is the user's own decision, not a failure. Let it through
+    // untouched, or the state gets overwritten to FAILED and the caller can no
+    // longer tell the two apart.
+    if (err instanceof JobCancelledError) throw err;
     await setState(jobId, 'FAILED', 'failed', 0, `Generation failed: ${(err as Error).message}`);
     updateGenerationJob(jobId, { state: 'FAILED', finishedAt: Date.now(), error: (err as Error).message });
     await emit(jobId, courseId, 'failed', `Failed: ${(err as Error).message}`, ordinal++, 'error');
@@ -512,6 +536,8 @@ export async function executeReplanJob(
     });
     await emit(jobId, courseId, 'replan', 'Course updated with the new material.', 3);
   } catch (err) {
+    // As above: cancelling is not failing.
+    if (err instanceof JobCancelledError) throw err;
     await setState(jobId, 'FAILED', 'replan', 0, `Replan failed: ${(err as Error).message}`);
     updateGenerationJob(jobId, {
       state: 'FAILED',

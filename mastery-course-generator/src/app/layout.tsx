@@ -18,7 +18,12 @@ const newsreader = Newsreader({
 });
 
 export const metadata: Metadata = {
-  title: 'KLAXO — study from your own material',
+  // A template, so each page can name itself in the tab and the browser's
+  // history instead of every page reading "study from your own material".
+  title: {
+    default: 'KLAXO — study from your own material',
+    template: '%s · KLAXO',
+  },
   description:
     'Turns the notes, slides and chapters you revise from into a course with practice, and tracks what you actually know.',
 };

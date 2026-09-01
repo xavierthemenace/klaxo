@@ -16,7 +16,7 @@ import { Input } from '@/components/ui/Input';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Textarea } from '@/components/ui/Textarea';
 import { cn } from '@/lib/cn';
-import QuestionCard from '@/components/workspace/QuestionCard';
+import QuestionCard, { type PreviousAttempt } from '@/components/workspace/QuestionCard';
 import LessonReader from '@/components/workspace/LessonReader';
 import type {
   Assessment,
@@ -33,6 +33,7 @@ import type {
 } from '@/components/workspace/types';
 import {
   formatDate,
+  lessonStatusLabel,
   masteryLabel,
   masteryVariant,
   relativeDays,
@@ -94,6 +95,8 @@ function Workspace() {
   const [course, setCourse] = useState<Course | null>(null);
   const [workspace, setWorkspace] = useState<WorkspaceData>(EMPTY_WORKSPACE);
   const [mastery, setMastery] = useState<MasteryData | null>(null);
+  /** Most recent answer per question, so an answered question does not come back blank. */
+  const [attempts, setAttempts] = useState<Record<string, PreviousAttempt>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>(() =>
@@ -129,6 +132,7 @@ function Workspace() {
           practiceSets: (ws.practiceSets ?? []) as PracticeSet[],
           questions: (ws.questions ?? []) as Question[],
         });
+        setAttempts((ws.attempts ?? {}) as Record<string, PreviousAttempt>);
       }
 
       if (masteryRes.ok) {
@@ -139,6 +143,20 @@ function Workspace() {
       setError(err instanceof Error ? err.message : 'Failed to load workspace');
     } finally {
       setLoading(false);
+    }
+  }, [courseId]);
+
+  /**
+   * Re-read just the mastery figures. Mastery was fetched once at mount, so
+   * answering a question left the Mastery tab and the Overview card showing
+   * what they showed before the answer until the page was reloaded.
+   */
+  const refreshMastery = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/courses/${courseId}/mastery`);
+      if (res.ok) setMastery((await res.json()) as MasteryData);
+    } catch {
+      /* a stale figure is better than an error banner over an answered question */
     }
   }, [courseId]);
 
@@ -253,10 +271,10 @@ function Workspace() {
           />
         )}
         {activeTab === 'practice' && (
-          <PracticeTab workspace={workspace} courseId={courseId} objectiveStatements={objectiveStatements} />
+          <PracticeTab workspace={workspace} courseId={courseId} objectiveStatements={objectiveStatements} attempts={attempts} onAnswered={refreshMastery} />
         )}
         {activeTab === 'assessments' && (
-          <AssessmentsTab workspace={workspace} courseId={courseId} objectiveStatements={objectiveStatements} />
+          <AssessmentsTab workspace={workspace} courseId={courseId} objectiveStatements={objectiveStatements} attempts={attempts} onAnswered={refreshMastery} />
         )}
         {activeTab === 'mastery' && (
           <MasteryTab mastery={mastery} />
@@ -357,10 +375,24 @@ function TabStrip({
       <div
         aria-hidden="true"
         className={cn(
-          'pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-background to-transparent transition-opacity duration-200',
+          'pointer-events-none absolute inset-y-0 right-0 flex w-12 items-center justify-end bg-gradient-to-l from-background via-background/90 to-transparent pb-1.5 transition-opacity duration-200',
           edges.end ? 'opacity-100' : 'opacity-0',
         )}
-      />
+      >
+        {/* A fade alone read as "the strip just ends there". On a phone only
+            three of the seven tabs fit, so say out loud that it scrolls. */}
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="h-4 w-4 text-muted-foreground"
+        >
+          <path d="M9 18l6-6-6-6" />
+        </svg>
+      </div>
     </div>
   );
 }
@@ -388,7 +420,12 @@ function OverviewTab({
   const objectiveCount = mastery?.objectiveCount ?? workspace.objectives.length;
   const progressPct = objectiveCount > 0 ? Math.round((mastered / objectiveCount) * 100) : 0;
 
-  const generatedLessons = workspace.lessons.filter((l) => l.status === 'generated').length;
+  // A lesson QA rewrote is stored as 'regenerated', which is still a written
+  // lesson. Counting only 'generated' produced the card saying "2 LESSONS" with
+  // "Lessons written 1 of 2" underneath it.
+  const writtenLessons = workspace.lessons.filter(
+    (l) => l.status === 'generated' || l.status === 'regenerated',
+  ).length;
 
   return (
     <div className="space-y-6">
@@ -437,9 +474,9 @@ function OverviewTab({
               <Row
                 label="Lessons written"
                 value={
-                  generatedLessons === workspace.lessons.length
+                  writtenLessons === workspace.lessons.length
                     ? `${workspace.lessons.length}`
-                    : `${generatedLessons} of ${workspace.lessons.length}`
+                    : `${writtenLessons} of ${workspace.lessons.length}`
                 }
               />
               <Row label="Practice questions" value={`${workspace.questions.length}`} />
@@ -450,8 +487,8 @@ function OverviewTab({
 
       <Card>
         <CardHeader>
-          <CardTitle>QA & readiness</CardTitle>
-          <CardDescription>Mastery signal and follow-up items</CardDescription>
+          <CardTitle>What to go back over</CardTitle>
+          <CardDescription>What is due for another look</CardDescription>
         </CardHeader>
         <CardContent>
           {mastery && mastery.upcomingReview.length > 0 ? (
@@ -725,7 +762,7 @@ function LessonsTab({
                                 : 'text-muted-foreground',
                             )}
                           >
-                            {lesson.status}
+                            {lessonStatusLabel(lesson.status)}
                           </span>
                         </button>
                       </li>
@@ -744,7 +781,7 @@ function LessonsTab({
             <CardHeader>
               <CardTitle>{selectedLesson.title}</CardTitle>
               <CardDescription>
-                <Badge variant="outline">{selectedLesson.status}</Badge>
+                <Badge variant="outline">{lessonStatusLabel(selectedLesson.status)}</Badge>
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -771,10 +808,14 @@ function PracticeTab({
   workspace,
   courseId,
   objectiveStatements,
+  attempts,
+  onAnswered,
 }: {
   workspace: WorkspaceData;
   courseId: string;
   objectiveStatements: Record<string, string>;
+  attempts: Record<string, PreviousAttempt>;
+  onAnswered: () => void;
 }) {
   // Practice questions = questions tied to a practice set, or questions NOT tied to any assessment.
   const practiceQuestions = useMemo(
@@ -790,6 +831,8 @@ function PracticeTab({
       questions={practiceQuestions}
       courseId={courseId}
       objectiveStatements={objectiveStatements}
+      attempts={attempts}
+      onAnswered={onAnswered}
       emptyTitle="No practice questions yet"
       emptyMessage="Practice questions appear here after the course is generated."
     />
@@ -802,10 +845,14 @@ function AssessmentsTab({
   workspace,
   courseId,
   objectiveStatements,
+  attempts,
+  onAnswered,
 }: {
   workspace: WorkspaceData;
   courseId: string;
   objectiveStatements: Record<string, string>;
+  attempts: Record<string, PreviousAttempt>;
+  onAnswered: () => void;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -876,6 +923,8 @@ function AssessmentsTab({
                 questions={questions}
                 courseId={courseId}
                 objectiveStatements={objectiveStatements}
+                attempts={attempts}
+                onAnswered={onAnswered}
               />
             )}
           </div>
@@ -892,12 +941,16 @@ function QuestionList({
   questions,
   courseId,
   objectiveStatements,
+  attempts,
+  onAnswered,
   emptyTitle,
   emptyMessage,
 }: {
   questions: Question[];
   courseId: string;
   objectiveStatements: Record<string, string>;
+  attempts: Record<string, PreviousAttempt>;
+  onAnswered?: () => void;
   emptyTitle?: string;
   emptyMessage?: string;
 }) {
@@ -913,6 +966,8 @@ function QuestionList({
           question={q}
           courseId={courseId}
           objectiveStatement={q.objectiveId ? objectiveStatements[q.objectiveId] ?? null : null}
+          previousAttempt={attempts[q.id] ?? null}
+          onAnswered={onAnswered}
         />
       ))}
     </div>
@@ -1238,7 +1293,7 @@ function VersionsTab({
               label="Label"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
-              placeholder="e.g. v1 — post-QA"
+              placeholder="e.g. first draft"
             />
             <Textarea
               label="Notes"
@@ -1311,8 +1366,11 @@ function VersionRow({
         <button type="button" onClick={onSelect} className="w-full text-left">
           <div className="flex items-center justify-between gap-2">
             <span className="font-medium">
-              v{version.versionNumber}
-              {version.label ? ` — ${version.label}` : ''}
+              {/* Labels usually start with the version number already, which
+                  produced headings like "v1 — v1 first draft". */}
+              {version.label?.trim().toLowerCase().startsWith(`v${version.versionNumber}`)
+                ? version.label
+                : `v${version.versionNumber}${version.label ? ` — ${version.label}` : ''}`}
             </span>
             <Badge variant={version.status === 'published' ? 'success' : 'secondary'}>
               {version.status === 'published' ? 'kept' : version.status}
